@@ -1,0 +1,6 @@
+# Copy this file to terraform.tfvars and fill in your values
+# terraform.tfvars is git-ignored — never commit real passwords
+
+db_password     = "YourStrongP@ssword123!"
+primary_rds_arn = "arn:aws:rds:ap-south-1:YOUR_ACCOUNT_ID:db:dr-demo-primary-db"
+aws_profile     = "default"

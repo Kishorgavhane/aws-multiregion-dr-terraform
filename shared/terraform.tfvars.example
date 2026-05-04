@@ -1,0 +1,18 @@
+# Copy this file to terraform.tfvars and fill in your values
+
+aws_profile            = "default"
+hosted_zone_id         = "Z1234567890ABC"
+domain_name            = "app.yourdomain.com"
+alert_email            = "your@email.com"
+
+# From: cd primary/ && terraform output
+primary_alb_dns        = "dr-demo-primary-alb-123456789.ap-south-1.elb.amazonaws.com"
+primary_alb_zone       = "ZP97RAFLXTNZK"
+primary_alb_arn_suffix = "app/dr-demo-primary-alb/abc123"
+primary_tg_arn_suffix  = "targetgroup/dr-demo-primary-tg/abc123"
+
+# From: cd dr/ && terraform output
+dr_alb_dns             = "dr-demo-dr-alb-987654321.ap-southeast-1.elb.amazonaws.com"
+dr_alb_zone            = "Z1LMS91P8CMLE5"
+dr_asg_name            = "dr-demo-dr-asg"
+dr_replica_id          = "dr-demo-dr-replica"

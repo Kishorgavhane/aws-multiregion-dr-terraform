@@ -1,0 +1,91 @@
+{
+  "schemaVersion": "0.3",
+  "description": "DR Failover Runbook — ap-south-1 (Mumbai) to ap-southeast-1 (Singapore)",
+  "assumeRole": "{{ AutomationAssumeRole }}",
+  "parameters": {
+    "DRRegion": {
+      "type": "String",
+      "default": "ap-southeast-1",
+      "description": "Target DR region"
+    },
+    "DRASGName": {
+      "type": "String",
+      "description": "DR Auto Scaling Group name"
+    },
+    "DRReplicaId": {
+      "type": "String",
+      "description": "DR RDS replica instance identifier"
+    },
+    "LambdaFunctionName": {
+      "type": "String",
+      "default": "dr-failover-handler",
+      "description": "Lambda function that orchestrates the failover"
+    },
+    "AutomationAssumeRole": {
+      "type": "String",
+      "description": "IAM role ARN for SSM Automation to assume"
+    }
+  },
+  "mainSteps": [
+    {
+      "name": "VerifyPrimaryIsDown",
+      "action": "aws:executeScript",
+      "description": "Confirm the primary alarm is in ALARM state before proceeding",
+      "inputs": {
+        "Runtime": "python3.8",
+        "Handler": "handler",
+        "Script": "def handler(events, context):\n    import boto3\n    cw = boto3.client('cloudwatch')\n    alarms = cw.describe_alarms(AlarmNames=['dr-primary-alb-unhealthy'])\n    if not alarms['MetricAlarms']:\n        raise Exception('Alarm not found. Check alarm name.')\n    state = alarms['MetricAlarms'][0]['StateValue']\n    if state != 'ALARM':\n        raise Exception(f'Primary appears healthy (state={state}). Aborting DR. Use ManualOverride=true to bypass.')\n    return {'primary_alarm_state': state, 'proceed': True}"
+      }
+    },
+    {
+      "name": "TriggerLambdaFailover",
+      "action": "aws:invokeLambdaFunction",
+      "description": "Invoke Lambda to promote RDS replica and scale DR ASG",
+      "inputs": {
+        "FunctionName": "{{ LambdaFunctionName }}",
+        "Payload": "{\"source\": \"ssm-automation\", \"detail-type\": \"Manual DR Failover via SSM Runbook\"}"
+      }
+    },
+    {
+      "name": "WaitForASGInstancesToStart",
+      "action": "aws:sleep",
+      "description": "Wait 3 minutes for DR EC2 instances to come up and pass health checks",
+      "inputs": {
+        "Duration": "PT3M"
+      }
+    },
+    {
+      "name": "VerifyDRASGHealthy",
+      "action": "aws:executeScript",
+      "description": "Confirm at least one healthy instance in DR ASG",
+      "inputs": {
+        "Runtime": "python3.8",
+        "Handler": "handler",
+        "InputPayload": {
+          "DRRegion": "{{ DRRegion }}",
+          "DRASGName": "{{ DRASGName }}"
+        },
+        "Script": "def handler(events, context):\n    import boto3\n    asg = boto3.client('autoscaling', region_name=events['DRRegion'])\n    resp = asg.describe_auto_scaling_groups(AutoScalingGroupNames=[events['DRASGName']])\n    instances = resp['AutoScalingGroups'][0]['Instances']\n    healthy = [i for i in instances if i['HealthStatus'] == 'Healthy']\n    if len(healthy) == 0:\n        raise Exception(f'No healthy instances in DR ASG yet. Total instances: {len(instances)}')\n    return {'healthy_count': len(healthy), 'total_count': len(instances), 'status': 'DR_ACTIVE'}"
+      }
+    },
+    {
+      "name": "WaitForRDSPromotion",
+      "action": "aws:executeScript",
+      "description": "Poll RDS every 30s until replica is promoted to standalone (up to 10 minutes)",
+      "inputs": {
+        "Runtime": "python3.8",
+        "Handler": "handler",
+        "InputPayload": {
+          "DRRegion": "{{ DRRegion }}",
+          "DRReplicaId": "{{ DRReplicaId }}"
+        },
+        "Script": "def handler(events, context):\n    import boto3, time\n    rds = boto3.client('rds', region_name=events['DRRegion'])\n    for attempt in range(20):\n        resp = rds.describe_db_instances(DBInstanceIdentifier=events['DRReplicaId'])\n        db = resp['DBInstances'][0]\n        status = db['DBInstanceStatus']\n        is_replica = bool(db.get('ReadReplicaSourceDBInstanceIdentifier'))\n        if status == 'available' and not is_replica:\n            return {'rds_status': status, 'is_standalone': True, 'endpoint': db['Endpoint']['Address']}\n        time.sleep(30)\n    return {'rds_status': status, 'is_standalone': False, 'note': 'Still promoting — check console'}"
+      }
+    }
+  ],
+  "outputs": [
+    "VerifyDRASGHealthy.healthy_count",
+    "WaitForRDSPromotion.rds_status",
+    "WaitForRDSPromotion.is_standalone"
+  ]
+}
